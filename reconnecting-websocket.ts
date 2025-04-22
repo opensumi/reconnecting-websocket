@@ -57,6 +57,19 @@ const DEFAULT = {
 };
 
 export type UrlProvider = string | (() => string) | (() => Promise<string>);
+export type ProtocolsProvider =
+    | undefined
+    | null
+    | string
+    | string[]
+    | (() => undefined | null | string | string[])
+    | (() => Promise<undefined | null | string | string[]>)
+    | Promise<undefined | null | string | string[]>;
+
+export type ConnectionInfo = {
+    url?: string;
+    protocols?: undefined | null | string[];
+};
 
 export type Message = string | ArrayBuffer | Blob | ArrayBufferView;
 
@@ -85,12 +98,12 @@ export default class ReconnectingWebSocket {
     private _messageQueue: Message[] = [];
 
     private readonly _url: UrlProvider;
-    private readonly _protocols?: string | string[];
+    private readonly _protocols?: ProtocolsProvider;
     private readonly _options: Options;
 
     private readonly _logger: IRWLogger;
 
-    constructor(url: UrlProvider, protocols?: string | string[], options: Options = {}) {
+    constructor(url: UrlProvider, protocols?: ProtocolsProvider, options: Options = {}) {
         this._url = url;
         this._protocols = protocols;
         this._options = options;
@@ -362,6 +375,41 @@ export default class ReconnectingWebSocket {
         throw Error('Invalid URL');
     }
 
+    private _getNextProtocols(
+        protocolsProvider: ProtocolsProvider,
+    ): Promise<undefined | null | string[]> {
+        if (typeof protocolsProvider === 'undefined') {
+            return Promise.resolve(protocolsProvider);
+        }
+
+        if (protocolsProvider === null) {
+            return Promise.resolve(protocolsProvider);
+        }
+
+        if (typeof protocolsProvider === 'string') {
+            return Promise.resolve([protocolsProvider]);
+        }
+
+        if (Array.isArray(protocolsProvider)) {
+            return Promise.resolve(protocolsProvider);
+        }
+
+        // @ts-ignore redundant check
+        if (protocolsProvider.then) {
+            return (protocolsProvider as Promise<ProtocolsProvider>).then(
+                (resolved: ProtocolsProvider) => {
+                    return this._getNextProtocols(resolved);
+                },
+            );
+        }
+
+        if (typeof protocolsProvider === 'function') {
+            return this._getNextProtocols(protocolsProvider() as ProtocolsProvider);
+        }
+
+        throw Error('Invalid Protocols');
+    }
+
     private _connect() {
         if (this._connectLock || !this._shouldReconnect) {
             return;
@@ -386,17 +434,29 @@ export default class ReconnectingWebSocket {
         if (!isWebSocket(WebSocket)) {
             throw Error('No valid WebSocket class provided');
         }
+
+        const connectionInfo: ConnectionInfo = {};
+
         this._wait()
             .then(() => this._getNextUrl(this._url))
             .then(url => {
+                connectionInfo.url = url;
+            })
+            .then(() => this._getNextProtocols(this._protocols))
+            .then(protocols => {
+                connectionInfo.protocols = protocols;
+            })
+            .then(() => {
                 // close could be called before creating the ws
                 if (this._closeCalled) {
                     this._connectLock = false;
                     return;
                 }
-                this._debug('connect', {url, protocols: this._protocols, options: this._options});
-                this._ws = this._protocols
-                    ? new WebSocket(url, this._protocols, this._options.WebSocketOptions)
+
+                const {url, protocols} = connectionInfo;
+                this._debug('connect', {url, protocols, options: this._options});
+                this._ws = protocols
+                    ? new WebSocket(url, protocols, this._options.WebSocketOptions)
                     : new WebSocket(url, this._options.WebSocketOptions);
                 this._ws!.binaryType = this._binaryType;
                 this._connectLock = false;
