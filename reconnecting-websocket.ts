@@ -83,6 +83,7 @@ export default class ReconnectingWebSocket {
     private _binaryType: BinaryType = 'blob';
     private _closeCalled = false;
     private _messageQueue: Message[] = [];
+    private _handleVisibilityChange: (() => void) | undefined;
 
     private readonly _url: UrlProvider;
     private readonly _protocols?: string | string[];
@@ -103,6 +104,7 @@ export default class ReconnectingWebSocket {
             this._logger = console;
         }
 
+        this._listenForVisibilityChange();
         this._connect();
     }
 
@@ -235,6 +237,7 @@ export default class ReconnectingWebSocket {
         this._closeCalled = true;
         this._shouldReconnect = false;
         this._clearTimeouts();
+        this._removeVisibilityChangeListener();
         if (!this._ws) {
             this._debug('close enqueued: no ws instance');
             return;
@@ -529,5 +532,30 @@ export default class ReconnectingWebSocket {
     private _clearTimeouts() {
         clearTimeout(this._connectTimeout);
         clearTimeout(this._uptimeTimeout);
+    }
+
+    private _listenForVisibilityChange() {
+        if (typeof document === 'undefined') {
+            return;
+        }
+        this._handleVisibilityChange = () => {
+            if (document.visibilityState === 'visible' && this._shouldReconnect) {
+                this._debug('visibility change: page visible');
+                // if the websocket is not open, attempt immediate reconnection
+                if (!this._ws || this._ws.readyState !== this.OPEN) {
+                    this._debug('visibility change: reconnecting');
+                    this.reconnect();
+                }
+            }
+        };
+        document.addEventListener('visibilitychange', this._handleVisibilityChange);
+    }
+
+    private _removeVisibilityChangeListener() {
+        if (typeof document === 'undefined' || !this._handleVisibilityChange) {
+            return;
+        }
+        document.removeEventListener('visibilitychange', this._handleVisibilityChange);
+        this._handleVisibilityChange = undefined;
     }
 }
