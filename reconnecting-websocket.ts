@@ -539,7 +539,7 @@ export default class ReconnectingWebSocket {
             return;
         }
         this._handleVisibilityChange = () => {
-            if (document.visibilityState === 'visible' && this._shouldReconnect) {
+            if (document.visibilityState === 'visible' && this._shouldReconnect && !this._closeCalled) {
                 this._debug('visibility change: page visible');
                 // if the websocket is not open, attempt immediate reconnection
                 if (!this._ws || this._ws.readyState !== this.OPEN) {
